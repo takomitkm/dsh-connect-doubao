@@ -17,10 +17,12 @@
  * @module dsh-connect-doubao/pi-entry
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import type { Api, Model, Provider, ProviderStreams } from '@earendil-works/pi-ai'
+import type { Api, Model, OAuthCredential, Provider, ProviderStreams } from '@earendil-works/pi-ai'
 import { createProvider } from '@earendil-works/pi-ai'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { createDoubaoShim, type DoubaoShim } from './doubao-shim.ts'
+import { browserLogin } from './doubao-auth-browser.ts'
+import { saveBrowserCredentials, loadDoubaoCredentials } from './doubao-auth.ts'
 import {
   DOUBAO_CONTEXT_WINDOW,
   DOUBAO_MAX_TOKENS,
@@ -88,14 +90,52 @@ function buildProvider(shim: DoubaoShim): Provider {
   return createProvider({
     id: PI_PROVIDER_ID,
     name: DOUBAO_PROVIDER_DISPLAY_NAME,
+    // Doubao has no API key. The login state is a browser session cookie,
+    // obtained by QR sign-in and sealed into the local DPAPI file; the shim
+    // reads that cookie jar per request. So the pi auth is declared as an
+    // OAuth flow whose `login` runs the QR sign-in, and whose `toAuth` merely
+    // confirms a session is present (the shim supplies the actual cookie).
+    // Declaring `apiKey` instead would make magpie pop an "API key" prompt —
+    // there is no key to enter.
     auth: {
-      apiKey: {
-        name: 'Doubao loopback shim secret',
-        async resolve({ credential }) {
-          const apiKey = credential?.key
-          return apiKey === undefined || apiKey.length === 0
-            ? undefined
-            : { auth: { apiKey }, source: 'Doubao' }
+      oauth: {
+        name: '豆包扫码登录',
+        loginLabel: '浏览器扫码登录豆包',
+        async login(interaction): Promise<OAuthCredential> {
+          const result = await browserLogin({
+            onProgress: (message) => interaction.notify({ message } as never),
+          })
+          if (!result.ok || !result.pairs || result.pairs.size === 0) {
+            throw new Error(result.reason ?? '豆包扫码登录失败')
+          }
+          saveBrowserCredentials(result.pairs)
+          const ok = loadDoubaoCredentials({ force: true })?.ok ?? false
+          if (!ok) {
+            throw new Error('扫码完成但读取登录态失败，请重试')
+          }
+          return {
+            type: 'oauth',
+            refresh: '',
+            access: 'doubao-qr-session',
+            // Doubao's session is a browser cookie with no token expiry to
+            // mirror here. A far-future value keeps pi from treating the
+            // credential as stale and calling refresh every turn; the shim's
+            // first rejected request remains the real expiry signal.
+            expires: Date.now() + 10 * 365 * 24 * 60 * 60 * 1000,
+          } as OAuthCredential
+        },
+        // Doubao rotates cookies server-side; there is no refresh token to
+        // exchange. Return the credential as-is; the shim's first rejected
+        // request is the accurate expiry signal.
+        async refresh(credential) {
+          return credential
+        },
+        // The shim owns the cookie jar. Auth is "logged in" iff a session is
+        // readable; the request itself carries the cookie via the shim.
+        async toAuth() {
+          const ok = loadDoubaoCredentials()?.ok ?? false
+          if (!ok) throw new Error('豆包未登录：请先 magpie plugin login doubao')
+          return {}
         },
       },
     },
