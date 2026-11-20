@@ -10,7 +10,9 @@
     "doubao",
     "seed",
     "model-provider",
-    "quota"
+    "quota",
+    "pi-package",
+    "pi-provider"
   ],
   "type": "module",
   "engines": {
@@ -27,6 +29,10 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./pi": {
+      "types": "./lib/pi-entry.d.ts",
+      "default": "./lib/pi-entry.js"
     },
     "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
@@ -80,7 +86,8 @@
     "@deepseek-ai/dsh-llm": ">=0.1.7-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.7-rc.1 <0.3.0-0",
     "@deepseek-ai/schemastery": ">=3.18.1-rc.1 <4.0.0 || >=3.18.2 <4.0.0",
-    "@earendil-works/pi-ai": ">=0.85.0 <0.88.0"
+    "@earendil-works/pi-ai": ">=0.85.0 <0.88.0",
+    "@earendil-works/pi-coding-agent": ">=0.85.0 <2.0.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-host-webserver": {
@@ -99,6 +106,7 @@
     "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.7-rc.1 <0.3.0-0",
     "@deepseek-ai/schemastery": "^3.18.4",
     "@earendil-works/pi-ai": ">=0.85.0 <0.88.0",
+    "@earendil-works/pi-coding-agent": ">=0.85.0 <2.0.0",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.31",
     "react": "^18.3.1",

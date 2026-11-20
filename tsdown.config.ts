@@ -71,6 +71,7 @@ export default [
   {
     entry: {
       index: 'src/index.ts',
+      'pi-entry': 'src/pi-entry.ts',
       bin: 'src/bin.ts',
       'cli-probe': 'src/cli-probe.ts',
       'cli-doctor': 'src/cli-doctor.ts',
@@ -85,6 +86,7 @@ export default [
     deps: {
       neverBundle: [
         '@earendil-works/pi-ai',
+        '@earendil-works/pi-coding-agent',
         '@deepseek-ai/dsh-llm',
         '@deepseek-ai/dsh-llm-pi-ai',
         // The settings schema is built with schemastery at module load, so it
