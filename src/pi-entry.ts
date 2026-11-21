@@ -153,12 +153,15 @@ function buildProvider(shim: DoubaoShim): Provider {
         async refresh(credential) {
           return credential
         },
-        // The shim owns the cookie jar. Auth is "logged in" iff a session is
-        // readable; the request itself carries the cookie via the shim.
+        // The shim owns the cookie jar, but pi still needs a non-empty bearer
+        // to reach it: an empty auth makes pi report "No API key for
+        // provider" before any request is made (magpie's pi.js maps that to
+        // 401). The shim's per-process secret is that bearer — it validates it
+        // and never forwards it upstream.
         async toAuth() {
           const ok = loadDoubaoCredentials()?.ok ?? false
           if (!ok) throw new Error('豆包未登录：请先 magpie plugin login doubao')
-          return {}
+          return { apiKey: shim.token() }
         },
       },
     },
