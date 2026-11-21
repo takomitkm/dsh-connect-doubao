@@ -182,6 +182,12 @@ function dpapiCall(mode: 'protect' | 'unprotect', blob: Buffer): Buffer {
         encoding: 'utf8',
         maxBuffer: 1 << 24,
         windowsHide: true,
+        // A helper that never exits must not block the caller's event loop for
+        // good: on the DSH host that is the whole application, and a host
+        // process with a wedged PowerShell child cannot serve any request
+        // (#19 upstream). 30s is far above a normal crypt32 round trip.
+        timeout: 30_000,
+        killSignal: 'SIGKILL',
         // The payload rides on stdin (see the script above); the environment is
         // narrowed to what PowerShell needs to start.
         input: blob.toString('base64'),
@@ -331,6 +337,14 @@ export function loadDoubaoCredentials(options: { force?: boolean } = {}): Doubao
   }
 
   const sealed = loadBrowserCredentials()
+  if (sealed === undefined && cached !== undefined && cached.credentials.ok) {
+    // A transient read failure (a locked file, a helper that timed out) must
+    // not replace a session that was readable a moment ago: the failure would
+    // then stick for the whole TTL and every request would report "log in"
+    // while the sealed session is still fine (#2 upstream). An explicit
+    // `force` read and clearCredentialCache() both bypass this.
+    return cached.credentials
+  }
   const credentials: DoubaoCredentials = sealed ?? {
     ok: false,
     reason: '还没有浏览器登录态。请在豆包卡片里点「重新登录」扫码一次。',

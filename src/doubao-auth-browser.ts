@@ -30,7 +30,7 @@
  * @module dsh-connect-doubao/auth-browser
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -92,9 +92,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms) })
 }
 
-/** Poll `http://127.0.0.1:<port>/json/version` until it answers. */
-async function waitForDevtools(port: number, deadline: number): Promise<string | undefined> {
+/**
+ * Read the port Chromium actually chose.
+ *
+ * `--remote-debugging-port=0` makes the browser pick a free port and write it,
+ * with the browser websocket path, to `DevToolsActivePort` in the profile. A
+ * fixed port (9333) collided with anything else already listening there and the
+ * sign-in then waited out its whole budget (#20 upstream).
+ */
+async function waitForActivePort(profile: string, deadline: number): Promise<number | undefined> {
+  const file = join(profile, 'DevToolsActivePort')
   while (Date.now() < deadline) {
+    try {
+      const first = readFileSync(file, 'utf8').split('\n')[0]?.trim() ?? ''
+      const port = Number(first)
+      if (Number.isInteger(port) && port > 0 && port < 65536) return port
+    } catch {
+      // Not written yet (or half-written); keep waiting until the deadline.
+    }
+    await sleep(250)
+  }
+  return undefined
+}
+
+/** Poll `http://127.0.0.1:<port>/json/version` until it answers. */
+async function waitForDevtools(port: number, deadline: number): Promise<string | undefined> {  while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
         signal: AbortSignal.timeout(2000),
@@ -217,11 +239,13 @@ export async function browserLogin(options: BrowserLoginOptions = {}): Promise<B
   const profile = browserProfileDir()
   mkdirSync(profile, { recursive: true })
 
-  // A fixed port would collide with a real debugging session the user may have
-  // open; 9333 is unusual enough to be safe and stable across retries.
-  const port = 9333
+  // Let Chromium pick a free port (`=0`) and read the one it chose from
+  // `DevToolsActivePort`. A fixed port collided with anything already listening
+  // there and the sign-in then waited out its whole budget (#20 upstream).
+  // Drop a stale file first: it may hold the port of a previous run.
+  rmSync(join(profile, 'DevToolsActivePort'), { force: true })
   const child = spawn(exe, [
-    `--remote-debugging-port=${String(port)}`,
+    '--remote-debugging-port=0',
     `--user-data-dir=${profile}`,
     '--no-first-run',
     '--no-default-browser-check',
@@ -231,9 +255,13 @@ export async function browserLogin(options: BrowserLoginOptions = {}): Promise<B
 
   try {
     say('已打开浏览器，请在弹出的窗口里扫码或短信登录…')
+    const port = await waitForActivePort(profile, Math.min(deadline, Date.now() + 20_000))
+    if (port === undefined) {
+      return { ok: false, reason: '浏览器没写出调试端口（DevToolsActivePort 未出现）。' }
+    }
     const wsUrl = await waitForDevtools(port, Math.min(deadline, Date.now() + 20_000))
     if (wsUrl === undefined) {
-      return { ok: false, reason: `浏览器调试端口 ${String(port)} 没起来（可能被占用）。` }
+      return { ok: false, reason: `浏览器调试端口 ${String(port)} 没响应。` }
     }
 
     let lastNote = 0
