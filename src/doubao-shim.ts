@@ -131,6 +131,46 @@ const KIND_STATUS: Readonly<Record<DoubaoErrorKind, number>> = {
   task_runtime_unavailable: 409,
 }
 
+/**
+ * Doubao rejects a prompt whose text field exceeds this many characters.
+ *
+ * Measured 2026-11-14 (#17 upstream): 262,144 characters answer normally,
+ * 262,145 come back as `710020202: common invalid param` in ~0.3s. The limit
+ * applies to the WHOLE assembled text — system prompt, history, tool results
+ * and the emulated tool contract — because the shim sends one `text_block`.
+ * It is a CHARACTER budget, not the token budget `contextWindow` advertises,
+ * so a request can sit under the declared context window and still be
+ * rejected upstream.
+ */
+const DOUBAO_MAX_PROMPT_CHARS = 262_144
+
+/**
+ * A prompt above the upstream character limit.
+ *
+ * Deliberately not a `DoubaoUpstreamError`: nothing was sent, so it must not
+ * be classified as an upstream failure — and it must never look like the
+ * `710020202` that triggers a continuation fallback (that path would re-send
+ * the same oversized prompt, fail again, and trip the breaker). The route
+ * answers 400 and names the budget so the caller compresses instead of
+ * retrying.
+ */
+class PromptTooLongError extends Error {
+  readonly chars: number
+  constructor(chars: number) {
+    super(
+      `request text is ${String(chars)} characters, above Doubao's ` +
+        `${String(DOUBAO_MAX_PROMPT_CHARS)}-character prompt limit; compress the context and retry`,
+    )
+    this.name = 'PromptTooLongError'
+    this.chars = chars
+  }
+}
+
+/** Refuse an oversized prompt locally, before it can reach the upstream. */
+function assertPromptFits(prompt: string): void {
+  if (prompt.length > DOUBAO_MAX_PROMPT_CHARS) throw new PromptTooLongError(prompt.length)
+}
+
 function writeJson(res: ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
@@ -765,6 +805,13 @@ export function createDoubaoShim(options: DoubaoShimOptions = {}): DoubaoShim {
     // A socket that already went away must not be written to: the client asked
     // for nothing and the write only produces EPIPE noise.
     if (res.writableEnded || res.destroyed) return
+    if (error instanceof PromptTooLongError) {
+      // Nothing left this process: 400 and no retry, with the budget named so
+      // the caller compresses rather than re-sending the same prompt.
+      if (!res.headersSent) res.setHeader('x-should-retry', 'false')
+      writeOpenAIError(res, 400, 'PROMPT_TOO_LONG', error.message)
+      return
+    }
     const kind: DoubaoErrorKind = error instanceof DoubaoUpstreamError
       ? classifyDoubaoFailure(error)
       : 'network'
@@ -931,7 +978,11 @@ export function createDoubaoShim(options: DoubaoShimOptions = {}): DoubaoShim {
         if (process.env.DSH_DOUBAO_DEBUG_PLAN === '1') {
           process.stderr.write('[plan] continuation rejected (710020202); re-issuing as fresh conversation\\n')
         }
-        result = await chat(buildPrompt(parsed.messages ?? []) + accounting.emulatedContractText, {
+        const reissuePrompt = buildPrompt(parsed.messages ?? []) + accounting.emulatedContractText
+        // A fresh conversation re-sends the whole transcript, so it is the
+        // LARGEST prompt this turn can produce — check it too.
+        assertPromptFits(reissuePrompt)
+        result = await chat(reissuePrompt, {
           ...requestOptions(parsed),
           signal: lifecycle.signal,
           callbacks,
@@ -1222,6 +1273,10 @@ export function createDoubaoShim(options: DoubaoShimOptions = {}): DoubaoShim {
       const prompt = emulate
         ? `${promptBody}${emulatedContractText}`
         : promptBody
+      // The upstream counts characters, not tokens (#17). Refuse locally: an
+      // oversized request would otherwise come back as `710020202`, which the
+      // continuation fallback would treat as a dead session and re-send.
+      assertPromptFits(prompt)
       // Diagnosis for "why did it answer something unrelated": the prompt is the
       // only thing we control, so being able to see exactly what went upstream is
       // the difference between debugging and guessing.
@@ -1294,7 +1349,9 @@ export function createDoubaoShim(options: DoubaoShimOptions = {}): DoubaoShim {
             if (process.env.DSH_DOUBAO_DEBUG_PLAN === '1') {
               process.stderr.write('[plan] continuation rejected (710020202); re-issuing as fresh conversation\\n')
             }
-            result = await chat(buildPrompt(parsed.messages ?? []) + emulatedContractText, {
+            const reissuePrompt = buildPrompt(parsed.messages ?? []) + emulatedContractText
+            assertPromptFits(reissuePrompt)
+            result = await chat(reissuePrompt, {
               ...requestOptions(parsed),
               signal,
             })

@@ -33,8 +33,20 @@ export const DOUBAO_PROVIDER = 'doubao'
 /** Shown in the DSH model picker. */
 export const DOUBAO_PROVIDER_DISPLAY_NAME = '豆包（Doubao）'
 
-/** How much context a Doubao conversation holds. */
-export const DOUBAO_CONTEXT_WINDOW = 256_000
+/**
+ * How much context a Doubao conversation holds.
+ *
+ * Deliberately BELOW the 256,000 the desktop app advertises. The app sends a
+ * structured transcript; this plugin flattens every turn into ONE `text_block`,
+ * and that field has a hard character ceiling upstream (measured 2026-11-14:
+ * 262,144 characters OK, 262,145 → `710020202`). Tokens and characters do not
+ * convert 1:1 — an English-heavy transcript can hit the character ceiling long
+ * before it reaches 256k tokens — so declaring 256k let callers grow a prompt
+ * past a limit they could not see (#17 upstream). 128k leaves room for the
+ * worst ratio while still being a large context; the shim also refuses an
+ * oversized prompt locally with a named error.
+ */
+export const DOUBAO_CONTEXT_WINDOW = 128_000
 
 /** Generous output ceiling; the subscription quota, not this, is the real bound. */
 export const DOUBAO_MAX_TOKENS = 32_000
