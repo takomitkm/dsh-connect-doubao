@@ -15,6 +15,102 @@
 
 ---
 
+## 📦 This repository is archived
+
+A **fork** of [`Wahwayhale/dsh-connect-doubao`](https://github.com/Wahwayhale/dsh-connect-doubao)
+that adds a **pi entry** (`src/pi-entry.ts` + the `pi-package` marker) so the same Doubao
+provider also runs under **pi / magpie**. The DSH half is unchanged.
+
+**No longer maintained.** What follows is what this fork's research turned up about
+**Doubao Work (豆包工作)**. **None of it is implemented here** — use the plugins listed
+below if you want Doubao Work.
+
+---
+
+## About Doubao Work (豆包工作)
+
+### Judgement: plain Doubao and Doubao Work are most likely the same account and quota
+
+**Evidence (usage-level observation, no account/API cross-check was done):**
+
+- **The daily check-in can only be claimed once**: after claiming it in plain Doubao, Doubao
+  Work refuses it, and vice versa. Independent account systems would not compete for the
+  same daily slot.
+- **The quota looks shared**: the "available / plan credits / activity grant" figures move
+  together on both sides.
+
+**Caveat:** this is what usage shows, not protocol-level proof. Doubao Work has its own site
+(`https://www.doubao.com/work`) and its own desktop client (`DoubaoWork`), with different
+menus and rate displays. "One shared quota pool" was **not** verified by comparing quota
+fields returned by both APIs. Treat it as the most economical explanation, not as
+documentation.
+
+### How to reach the Doubao Work models from plain Doubao
+
+The plain client groups its model menu by **mode**:
+
+- `default_mode: 1` — chat (快速 / 2.1 Turbo)
+- `default_mode: 3` — **task mode** (工作任务): 2.1 Pro / 2.1 Lite / Auto, plus third-party
+  models (DeepSeek V4, Kimi K3, GLM 5.3, Qwen, …)
+
+**Task mode is the entry point for the Doubao Work model set inside plain Doubao.** Request
+shape (CDP capture, 2026-10):
+
+```
+mode_id: "3"
+agent_mode: 1
+general_task_param.runtime_type: 2   # local PC
+model_item_key: "5"                  # 2.1 Pro; "9" auto; "seed-lite-7b" 2.1 Lite
+```
+
+Three measured facts:
+
+1. **The server does not validate `model_item_key`**: replacing all three occurrences with a
+   non-existent value still returns 200 and a complete stream with no error frame. Which
+   model actually runs is decided by **mode + account**, so a plugin cannot promise that Pro
+   rather than Lite does the work.
+2. **A small text-only turn is downgraded and not billed**: in task mode, a turn that triggers
+   no local tool gets `general_agent_task_mode: "simple"` and
+   `mode_downgrade_reason: "success"` in `ext`, and the activity grant's `usedAmount` does not
+   move (measured: 782 before and after). Real paid-quota spend needs a multi-step
+   tool/document task.
+3. **The execution side of task mode was the desktop app's own in-process CUA runtime**
+   (`tasks-mode-resource` + `sbox`); external clients cannot register into it and every turn
+   returned `710010702`. This plugin works around that by answering three local HTTP calls
+   concurrently (`/alice/office/tool_local/{msg/ack, upload_command_result, msg/complete}`);
+   measured working 2026-11-05.
+
+### If you want a Doubao Work subscription, use these (not this repository)
+
+| Plugin | Platforms | Notes |
+| --- | --- | --- |
+| [miaocell/magpie-doubao-work-auth](https://github.com/miaocell/magpie-doubao-work-auth) | Windows / macOS full, Linux "paste Cookie" only | Most complete (27★): no client needed, QR or pasted Cookie, multiple accounts, model menu read live, quota + check-in (read-only) |
+| [245678000000/magpie-doubaowork-auth](https://github.com/245678000000/magpie-doubaowork-auth) | macOS / Chrome / Edge | browser multi-account sign-in, dynamic models, SSE |
+| [3294798852/magpie-doubao-work](https://github.com/3294798852/magpie-doubao-work) | Windows / macOS / Linux | browser sign-in + JSON import, with [doubao-work-gateway](https://github.com/3294798852/doubao-work-gateway) |
+| `opencode-doubao` (npm) | **Linux only** | reuses a local Doubao CLI sign-in; verified only on Linux x64 + Bun 1.4, Windows untested, tool bridge not accepted |
+
+**Important (measured the hard way): Doubao Work's daily check-in only works in the Doubao
+Work desktop client — never let a plugin claim it for you.** Calling the check-in endpoint
+from the web or a plugin is refused (`710010702`), and **the failed write cannot be undone**:
+the server state looks unchanged, but the next attempt from the client says "当前暂不符合领取
+条件" and that day's quota is gone. miaocell's plugin therefore keeps check-in strictly
+read-only; do not "just try it".
+
+> Background: magpie's maintainer explicitly refuses to list consumer Doubao reverse-proxy
+> plugins (PR #548 review: violates ByteDance's terms, puts accounts at risk). The plugins
+> above are for personal use only — bans, rate limits and broken endpoints are on you. The
+> stable route is the official API: `magpie provider add volcengine <key>` (Volcengine Ark,
+> pay per use).
+
+### What this repository did and did not do
+
+- ✅ Done: plain Doubao **chat + task-mode** models (DSH / pi / magpie), Seedream images,
+  quota panel
+- ❌ **Not done**: Doubao Work subscriptions, Doubao Work check-in, Doubao Work multi-account
+- Want Doubao Work → use the plugins above, not this repository
+
+---
+
 ## ⚠️ Prerequisites (read first)
 
 **There is exactly one way in: one browser QR sign-in. The Doubao desktop app is

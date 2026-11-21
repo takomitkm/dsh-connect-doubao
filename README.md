@@ -13,6 +13,90 @@
 
 ---
 
+## 📦 本仓库的现状：已归档
+
+这是一个 **fork**，在 [`Wahwayhale/dsh-connect-doubao`](https://github.com/Wahwayhale/dsh-connect-doubao)
+之上加了 **pi 入口**（`src/pi-entry.ts` + `pi-package` 标记），让同一个豆包 provider 也能在
+**pi / magpie** 里运行。DSH 侧的行为没有改动。
+
+**本仓库已归档，不再维护。** 下面记录本次调研得到的、关于**豆包工作（Doubao Work）**的判断与
+情报，供以后需要时参考。**这些能力本仓库一个都没做**，要用请去用文末列出的那些插件。
+
+---
+
+## 关于豆包工作（Doubao Work）
+
+### 判断：普通豆包与豆包工作很可能是同一套账号与额度
+
+**依据（使用层面的观察，未做账号/API 层面的交叉验证）：**
+
+- **每日签到只能各签一次**：普通豆包签到之后，豆包工作那边不能再签；反过来也一样。
+  如果两者是独立账号体系，两份签到不应互相占位。
+- **额度看起来是同一份**：两边看到的「可用额度 / 套餐积分 / 活动赠送额度」会一起变化。
+
+**保留意见：** 以上是使用观察，不是协议层证据。豆包工作有独立官网入口
+（`https://www.doubao.com/work`）与独立桌面客户端（`DoubaoWork`），两边菜单与倍率展示方式不同；
+「同一个额度池」这个结论**没有**通过对比两边 API 返回的额度字段来验证。按「同一套账号额度、
+两个入口」来理解最省事，但不要当成官方文档。
+
+### 怎么在普通豆包里调用「豆包工作」的模型
+
+普通豆包客户端的模型菜单把模型按**模式**分组：
+
+- `default_mode: 1` —— 对话模式（快速 / 2.1 Turbo）
+- `default_mode: 3` —— **工作任务模式**（2.1 Pro / 2.1 Lite / 自动，以及 DeepSeek V4、
+  Kimi K3、GLM 5.3、Qwen 等第三方模型）
+
+**工作任务模式就是「豆包工作」那批模型在普通豆包里的入口。** 请求形态（CDP 抓包实测，2026-10）：
+
+```
+mode_id: "3"
+agent_mode: 1
+general_task_param.runtime_type: 2   # 本地电脑
+model_item_key: "5"                  # 2.1 Pro；"9" 自动；"seed-lite-7b" 2.1 Lite
+```
+
+三个实测出来的关键事实：
+
+1. **服务端不校验 `model_item_key`**：把三处 `model_item_key` 全部改成一个不存在的值，服务端仍然
+   返回 200 与完整正常流，没有任何错误帧。所以「选了哪个模型」只能靠**模式 + 账号**决定，
+   插件无法保证服务端真的用 Pro 而不是 Lite 来算。
+2. **纯文本小回合会被降级为不计费**：任务模式下不触发本地工具的小回合，服务端会在 `ext` 里标
+   `general_agent_task_mode: "simple"` 与 `mode_downgrade_reason: "success"`，活动赠送额度的
+   `usedAmount` 不变（实测调用前后恒为 782）。想让任务模型真正消耗付费额度，得让它执行多步
+   工具/文档任务。
+3. **工作任务模式的执行侧原先是豆包客户端进程内的 CUA 运行时**（`tasks-mode-resource` + `sbox`），
+   外部客户端注册不进去，每轮必然 `710010702`。本插件通过并发跑三条 HTTP 应答
+   （`/alice/office/tool_local/{msg/ack, upload_command_result, msg/complete}`）绕过，实测
+   2026-11-05 通过。
+
+### 如果你要用「豆包工作」订阅，用这些插件（不是本仓库）
+
+| 插件 | 平台 | 说明 |
+| --- | --- | --- |
+| [miaocell/magpie-doubao-work-auth](https://github.com/miaocell/magpie-doubao-work-auth) | Windows / macOS 完整，Linux 仅「粘贴 Cookie」 | 最完整（27★）：免客户端、扫码或贴 Cookie、多账号、模型菜单从账号现取、额度 + 签到（只读） |
+| [245678000000/magpie-doubaowork-auth](https://github.com/245678000000/magpie-doubaowork-auth) | macOS / Chrome / Edge | 浏览器多账号登录、动态模型、SSE |
+| [3294798852/magpie-doubao-work](https://github.com/3294798852/magpie-doubao-work) | Windows / macOS / Linux | 浏览器登录 + JSON 导入，配套 [doubao-work-gateway](https://github.com/3294798852/doubao-work-gateway) |
+| `opencode-doubao`（npm） | **仅 Linux** | 复用本机豆包 CLI 登录；作者只在 Linux x64 + Bun 1.4 验证过，Windows 未验证，工具桥未过验收 |
+
+**特别注意（实测踩过的坑）：豆包工作的每日签到只能在豆包工作桌面客户端里点，插件不要代签。**
+网页/插件直接调签到接口会被拒（`710010702`），而且**失败的写入不可回滚**——服务端状态看起来
+没变，但你之后去客户端点签到会弹「当前暂不符合领取条件」，当天额度直接作废。miaocell 的插件
+因此把签到做成纯只读；看到这段的人也不要「试一下看看」。
+
+> 背景：magpie 官方维护者明确拒绝收录「消费级豆包」这类反代插件（PR #548 的 review：违反字节
+> 服务条款、账号有风控风险）。上面这些插件只适合自己用，封号/限流/接口失效都自行承担。稳定
+> 路线是用官方 API：`magpie provider add volcengine <key>`（火山方舟，按量付费）。
+
+### 本仓库做了什么、没做什么
+
+- ✅ 做了：普通豆包账号的**对话模型 + 工作任务模型**接入（DSH / pi / magpie）、Seedream 生图、
+  额度看板
+- ❌ **没做**：豆包工作的订阅支持、豆包工作的签到、豆包工作的多账号管理
+- 要用豆包工作 → 用上面表格里的插件，不要用本仓库
+
+---
+
 ## ⚠️ 前置条件（必读）
 
 **登录方式只有一种：浏览器扫码登录一次。不需要安装或登录豆包桌面客户端。**
