@@ -102,8 +102,31 @@ function buildProvider(shim: DoubaoShim): Provider {
         name: '豆包扫码登录',
         loginLabel: '浏览器扫码登录豆包',
         async login(interaction): Promise<OAuthCredential> {
+          // magpie's pi bridge (internal/plugin/pi.js) builds its authorize()
+          // result from an `auth_url` event: with none, `url` is "" and the UI
+          // has nothing to show or poll, so the finished sign-in is dropped
+          // even though the cookie jar was already written.
+          interaction.notify({
+            type: 'auth_url',
+            url: 'https://www.doubao.com/chat/',
+            instructions:
+              '如果本机已有豆包登录态，点登录会直接完成。需要扫码时，请只在自动弹出的独立窗口里扫码——登录态只能从那个窗口读取，用其它浏览器登录不会被读到。',
+          })
+          // Reuse a local session before opening a browser. The cookie jar this
+          // plugin writes is the only source the shim reads, so an existing
+          // readable session makes the whole QR round trip unnecessary.
+          const existing = loadDoubaoCredentials({ force: true })
+          if (existing?.ok && existing.pairs && existing.pairs.size > 0) {
+            return {
+              type: 'oauth',
+              refresh: '',
+              access: 'doubao-qr-session',
+              expires: Date.now() + 10 * 365 * 24 * 60 * 60 * 1000,
+            } as OAuthCredential
+          }
           const result = await browserLogin({
-            onProgress: (message) => interaction.notify({ message } as never),
+            // Progress ticks are frequent; the bridge only surfaces `info`.
+            onProgress: (message) => interaction.notify({ type: 'progress', message }),
           })
           if (!result.ok || !result.pairs || result.pairs.size === 0) {
             throw new Error(result.reason ?? '豆包扫码登录失败')
